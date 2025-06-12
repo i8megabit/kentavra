@@ -1,0 +1,200 @@
+#!/usr/bin/bash
+
+# check - скрипт диагностики для Akvorado
+
+# Подключаем файл с переменными окружения
+source "$(dirname "$0")/env"
+
+echo -e "${BLUE}=== Скрипт диагностики Akvorado ===${NC}"
+
+# Функция для проверки успеха
+print_status() {
+  if [ $1 -eq 0 ]; then
+    echo -e "[ ${GREEN}OK${NC} ] $2"
+  else
+    echo -e "[${RED}ОШИБКА${NC}] $2"
+    [ -n "$3" ] && echo -e "${YELLOW}Решение:${NC} $3"
+  fi
+}
+
+# Функция проверки контейнера
+check_container() {
+  container_id=$(docker ps -q --filter "name=$1")
+  if [ -z "$container_id" ]; then
+    echo -e "[${RED}ОШИБКА${NC}] Контейнер $1 не запущен"
+    return 1
+  fi
+  status=$(docker inspect --format='{{.State.Status}}' "$container_id")
+  if [ "$status" != "running" ]; then
+    echo -e "[${RED}ОШИБКА${NC}] Контейнер $1 в статусе: $status"
+    return 1
+  fi
+  echo -e "[ ${GREEN}OK${NC} ] Контейнер $1 запущен"
+  return 0
+}
+
+# Функция для выполнения команды через контейнер zookeeper
+exec_zoo() {
+  zoo_id=$(docker ps -q --filter "name=zookeeper")
+  [ -z "$zoo_id" ] && return 1
+  docker exec $zoo_id bash -c "$1" >/dev/null 2>&1
+  return $?
+}
+
+# Функция для проверки наличия ошибок в логах
+check_logs() {
+  docker logs $1 2>&1 | grep -i "error" | grep -v "level=info" >/dev/null
+  if [ $? -eq 0 ]; then
+    echo -e "[${RED}ОШИБКА${NC}] В логах $2 обнаружены ошибки"
+    echo -e "${YELLOW}Последние ошибки:${NC}"
+    docker logs $1 2>&1 | grep -i "error" | grep -v "level=info" | tail -3
+    return 1
+  else
+    echo -e "[ ${GREEN}OK${NC} ] Ошибок в логах $2 не обнаружено"
+    return 0
+  fi
+}
+
+# ПРОВЕРКА КОНТЕЙНЕРОВ
+echo -e "${BLUE}Проверка контейнеров Docker:${NC}"
+CONTAINERS=("zookeeper" "kafka" "redis" "clickhouse" "akvorado-orchestrator" "akvorado-inlet" "akvorado-console")
+all_containers_ok=0
+
+for container in "${CONTAINERS[@]}"; do
+  check_container "$container" || all_containers_ok=1
+done
+
+[ $all_containers_ok -ne 0 ] && echo -e "${YELLOW}Решение:${NC} Перезапустите контейнеры:\ndocker compose down\ndocker compose up -d zookeeper\nsleep $ZOOKEEPER_WAIT_TIME\ndocker compose up -d kafka\nsleep $KAFKA_WAIT_TIME\ndocker compose up -d"
+
+echo -e "\n${BLUE}Проверка Zookeeper:${NC}"
+zoo_id=$(docker ps -q --filter "name=zookeeper")
+if [ -n "$zoo_id" ]; then
+  zoo_status=$(docker exec $zoo_id bash -c "(echo ruok; sleep 1) | nc localhost $ZOOKEEPER_PORT" 2>/dev/null)
+  [[ "$zoo_status" == "imok" ]] && echo -e "[ ${GREEN}OK${NC} ] Zookeeper работает нормально" || echo -e "[${RED}ОШИБКА${NC}] Zookeeper не отвечает"
+fi
+
+echo -e "\n${BLUE}Проверка Kafka:${NC}"
+kafka_id=$(docker ps -q --filter "name=kafka")
+if [ -n "$kafka_id" ] && [ -n "$zoo_id" ]; then
+  # Проверка соединений
+  exec_zoo "curl -s kafka:$KAFKA_JMX_PORT/metrics"
+  print_status $? "Доступность Kafka JMX" "Проверьте логи Kafka"
+  
+  exec_zoo "nc -z kafka $KAFKA_PORT -w 2"
+  print_status $? "Доступность Kafka (порт $KAFKA_PORT)" "Проверьте логи Kafka"
+  
+  # Проверка топиков Kafka
+  topics=$(docker exec $kafka_id sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list")
+  if echo "$topics" | grep -q "akvorado-flows"; then
+    echo -e "[ ${GREEN}OK${NC} ] Топик 'akvorado-flows' существует"
+  elif echo "$topics" | grep -q "flows"; then  
+    echo -e "[ ${GREEN}OK${NC} ] Топик 'flows' существует (альтернативное имя для akvorado-flows)"
+  else
+    echo -e "[${RED}ОШИБКА${NC}] Топик 'akvorado-flows' или 'flows' не найден"
+    echo -e "${YELLOW}Доступные топики:${NC}\n$topics"
+  fi
+fi
+
+echo -e "\n${BLUE}Проверка сетевых соединений:${NC}"
+if [ -n "$zoo_id" ]; then
+  # Проверяем DNS и сеть
+  declare -A SERVICES
+  SERVICES["kafka"]="kafka:$KAFKA_PORT"
+  SERVICES["clickhouse"]="clickhouse:$CLICKHOUSE_HTTP_PORT"
+  SERVICES["inlet"]="akvorado-inlet:$TRAEFIK_PORT"
+  SERVICES["orchestrator"]="akvorado-orchestrator:$TRAEFIK_PORT"
+  
+  # Порты для сообщений об ошибках
+  declare -A PORT_MAP
+  PORT_MAP["kafka"]=$KAFKA_PORT
+  PORT_MAP["clickhouse"]=$CLICKHOUSE_HTTP_PORT
+  PORT_MAP["inlet"]=$TRAEFIK_PORT
+  PORT_MAP["orchestrator"]=$TRAEFIK_PORT
+  
+  # Проверка соединений для каждого сервиса
+  for service in "${!SERVICES[@]}"; do
+    endpoint=${SERVICES[$service]}
+    port=${PORT_MAP[$service]}
+    
+    exec_zoo "nc -z -v $endpoint -w 2"
+    print_status $? "Соединение с $endpoint (порт $port)" "Проверьте доступность ${service^}"
+  done
+fi
+
+echo -e "\n${BLUE}Проверка ClickHouse:${NC}"
+clickhouse_id=$(docker ps -q --filter "name=clickhouse")
+if [ -n "$clickhouse_id" ]; then
+  exec_zoo "curl -s clickhouse:$CLICKHOUSE_HTTP_PORT/ping"
+  print_status $? "Доступность ClickHouse через HTTP" "Проверьте логи ClickHouse"
+  
+  # Проверка таблиц
+  docker exec $clickhouse_id clickhouse-client --query="SHOW DATABASES" >/dev/null 2>&1
+  print_status $? "Подключение к ClickHouse CLI" "Проверьте логи ClickHouse"
+  
+  docker exec $clickhouse_id clickhouse-client --query="SHOW TABLES FROM $CLICKHOUSE_DB" >/dev/null 2>&1
+  tables_status=$?
+  print_status $tables_status "Наличие таблиц в базе $CLICKHOUSE_DB" "Проверьте логи orchestrator"
+  
+  if [ $tables_status -eq 0 ]; then
+    flow_count=$(docker exec $clickhouse_id clickhouse-client --query="SELECT count() FROM $CLICKHOUSE_DB.$CLICKHOUSE_TABLE" 2>/dev/null)
+    if [[ "$flow_count" =~ ^[0-9]+$ ]]; then
+      [ $flow_count -gt 0 ] && echo -e "[ ${GREEN}OK${NC} ] В таблице $CLICKHOUSE_TABLE есть данные ($flow_count)" || echo -e "[${YELLOW}ВНИМАНИЕ${NC}] Таблица $CLICKHOUSE_TABLE пуста"
+    fi
+  fi
+fi
+
+echo -e "\n${BLUE}Проверка Inlet:${NC}"
+inlet_id=$(docker ps -q --filter "name=akvorado-inlet")
+if [ -n "$inlet_id" ]; then
+  check_logs $inlet_id "inlet"
+  
+  # Проверка получения пакетов
+  exec_zoo "curl -s akvorado-inlet:$TRAEFIK_PORT/api/v0/inlet/metrics | grep flow_packets_received" | grep -v "value=\"0\"" >/dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo -e "[${YELLOW}ВНИМАНИЕ${NC}] Нет входящих пакетов NetFlow/sFlow"
+    echo -e "${YELLOW}Решение:${NC} $CONNTRACK_RESET_CMD $NETFLOW_PORT / $SFLOW_PORT / $IPFIX_PORT"
+  else
+    echo -e "[ ${GREEN}OK${NC} ] Inlet получает пакеты"
+  fi
+fi
+
+echo -e "\n${BLUE}Проверка Orchestrator:${NC}"
+orchestrator_id=$(docker ps -q --filter "name=akvorado-orchestrator")
+if [ -n "$orchestrator_id" ]; then
+  check_logs $orchestrator_id "orchestrator"
+  
+  exec_zoo "curl -s akvorado-orchestrator:$TRAEFIK_PORT/api/v0/orchestrator/metrics"
+  print_status $? "Доступность метрик orchestrator" "Проверьте логи orchestrator"
+  
+  exec_zoo "curl -s akvorado-orchestrator:$TRAEFIK_PORT/api/v0/orchestrator/clickhouse/check"
+  print_status $? "Соединение orchestrator с ClickHouse" "Проверьте сетевые настройки"
+fi
+
+echo -e "\n${BLUE}Проверка SNMP:${NC}"
+if command -v snmpd >/dev/null 2>&1; then
+  systemctl is-active --quiet snmpd
+  if [ $? -eq 0 ]; then
+    echo -e "[ ${GREEN}OK${NC} ] SNMP демон запущен"
+    snmpwalk -v 2c -c $SNMP_COMMUNITY localhost $SNMP_OID >/dev/null 2>&1
+    print_status $? "Локальный SNMP v2c работает" "Проверьте настройки в $SNMP_CONF"
+  else
+    echo -e "[${YELLOW}ВНИМАНИЕ${NC}] SNMP демон не запущен"
+  fi
+else
+  echo -e "[${YELLOW}ВНИМАНИЕ${NC}] SNMP не установлен"
+fi
+
+echo -e "\n${BLUE}Проверка Web-интерфейса:${NC}"
+if [ -n "$zoo_id" ]; then
+  exec_zoo "curl -s akvorado-console:$WEB_UI_PORT/"
+  print_status $? "Доступ к web-интерфейсу" "Проверьте логи console и traefik"
+else
+  curl -s http://$HOST_NETWORK_IP:$WEB_UI_PORT/ >/dev/null 2>&1
+  print_status $? "Доступ к web-интерфейсу по адресу http://$EXTERNAL_NETWORK_IP:$WEB_UI_PORT/" "Проверьте логи console"
+fi
+
+echo -e "\n${BLUE}=== Общие рекомендации при проблемах ===${NC}"
+echo -e "${YELLOW}1. Kafka/Zookeeper:${NC} Перезапустите контейнеры в порядке, используйте env -u JMX_PORT при выполнении команд"
+echo -e "${YELLOW}2. Inlet:${NC} $TCPDUMP_CMD, $CONNTRACK_RESET_CMD $NETFLOW_PORT, $SOFTFLOW_START_CMD"
+echo -e "${YELLOW}3. ClickHouse:${NC} docker exec clickhouse clickhouse-client --query=\"SHOW TABLES FROM $CLICKHOUSE_DB\""
+echo -e "${YELLOW}4. Полный сброс:${NC} ./kentavra/run clean && ./kentavra/run install && ./kentavra/run start"

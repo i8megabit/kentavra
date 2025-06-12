@@ -1,0 +1,42 @@
+---
+services:
+  # main services
+  zookeeper:
+    image: docker.io/bitnami/zookeeper:${ZOOKEEPER_VERSION:-3.8} # \d+\.\d+
+  kafka:
+    image: docker.io/bitnami/kafka:${KAFKA_VERSION:-3.7} # \d+\.\d+
+  redis:
+    image: docker.io/bitnami/valkey:${REDIS_VERSION:-7.2} # \d+\.\d+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:${CLICKHOUSE_VERSION:-24.8} # \d+\.[38]
+  traefik:
+    image: docker.io/traefik:${TRAEFIK_VERSION:-v3.1} # v\d+\.\d+
+  maxmind-geoipupdate:
+    image: docker.io/maxmind/geoipupdate:v7
+  ipinfo-geoipupdate:
+    image: docker.io/akvorado/ipinfo-geoipupdate:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.ipinfo-geoipupdate
+  akvorado:
+    image: docker.io/akvorado/akvorado:${AKVORADO_VERSION:-1.11.3}
+
+  # observability
+  grafana:
+    image: docker.io/grafana/grafana-oss:10.2.6 # \d+\.\d+\.\d+
+  prometheus:
+    image: docker.io/prom/prometheus:v2.47.2 # v\d+\.\d+\.\d+
+  node-exporter:
+    image: docker.io/prom/node-exporter:v1.7.0 # v\d+\.\d+\.\d+
+  kafka-jmx-exporter:
+    image: docker.io/bitnami/jmx-exporter:0
+  kafka-ui:
+    image: docker.io/provectuslabs/kafka-ui:v0.7.2 # v\d+\.\d+\.\d+
+
+  # for tests
+  srlinux:
+    image: docker.io/nokia/srlinux:23.10.6
+  postgres:
+    image: docker.io/bitnami/postgresql:16.3.0 # \d+\.\d+\.0
+  mysql:
+    image: docker.io/bitnami/mariadb:11.3 # \d+\.\d+

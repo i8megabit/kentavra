@@ -1,0 +1,14 @@
+---
+services:
+  zookeeper:
+    hostname: zookeeper
+  kafka:
+    hostname: kafka
+  clickhouse:
+    hostname: clickhouse
+  akvorado-orchestrator:
+    hostname: akvorado-orchestrator
+  akvorado-inlet:
+    hostname: akvorado-inlet
+  akvorado-console:
+    hostname: akvorado-console
