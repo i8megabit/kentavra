@@ -1,0 +1,1119 @@
+#!/usr/bin/bash
+
+# Определение директории скрипта
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# TODO: Проверка наличия директории скриптов в PATH!!
+#if [[ ":$PATH:" != *":$SCRIPT_DIR:"* ]]; then
+#    echo -e "Добавляю директорию скриптов $SCRIPT_DIR в PATH"
+#    export PATH="$SCRIPT_DIR:$PATH"
+#fi
+
+# Подключаем файл с переменными окружения
+source "$(dirname "$0")/env"
+
+# =====================================================
+# Akvorado Kentavra!
+# =====================================================
+
+# ASCII баннер
+print_banner() {
+    cat << "EOF"
+    
+ ██╗  ██╗███████╗███╗   ██╗████████╗ █████╗ ██╗   ██╗██████╗  █████╗ 
+ ██║ ██╔╝██╔════╝████╗  ██║╚══██╔══╝██╔══██╗██║   ██║██╔══██╗██╔══██╗
+ █████╔╝ █████╗  ██╔██╗ ██║   ██║   ███████║██║   ██║██████╔╝███████║
+ ██╔═██╗ ██╔══╝  ██║╚██╗██║   ██║   ██╔══██║╚██╗ ██╔╝██╔══██╗██╔══██║
+ ██║  ██╗███████╗██║ ╚████║   ██║   ██║  ██║ ╚████╔╝ ██║  ██║██║  ██║
+ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝
+                                                                    
+EOF
+    echo -e "${CYAN}Оркестратор Akvorado v$VERSION${NC}\n"
+}
+
+# Функция для отображения справки
+show_help() {
+    print_banner
+    echo -e "${BOLD}Использование:${NC} run [команда] [опции]"
+    echo
+    echo -e "${BOLD}Команды:${NC}"
+    echo -e "  ${GREEN}install | start  | stop${NC} - Установка/настройка/остановка Akvorado"
+    echo -e "  ${GREEN}restart | status${NC}        - Перезапуск всех сервисов/просмотр состояния/дебаг"
+    echo -e "  ${GREEN}clean${NC}                   - Удаление всех данных и контейнеров"
+    echo -e "  ${GREEN}debug${NC}                   - Запуск диагностики и вывод рекомендаций"
+    echo -e "  ${GREEN}db-query${NC}    [запрос]    - Выполнение запроса к ClickHouse (без аргументов - список таблиц)"
+    echo -e "  ${GREEN}fix${NC}         [проблема]  - Исправление распространенных проблем"
+    echo -e "  ${GREEN}kafka-topic${NC} [cmd]       - Управление топиками Kafka (list, describe, create)"
+    echo -e "  ${GREEN}logs${NC}        [сервис]    - Просмотр логов (без аргументов - все сервисы)"
+    echo -e "  ${GREEN}test${NC}        [тип]       - Генерация тестовых данных (tcpdump, softflowd)"
+    echo -e "  ${GREEN}disable-demo${NC}            - Отключение демо-режима"
+    echo -e "  ${GREEN}enable-geoip${NC}            - Включение GeoIP (отключен по умолчанию)"
+    echo -e "  ${GREEN}snmp-setup${NC}              - Установка и настройка SNMP"
+    echo -e "  ${GREEN}help${NC}                    - Показать эту справку"
+    echo
+    echo -e "${BOLD}Доступные проблемы для команды fix:${NC}"
+    echo -e "  ${YELLOW}conntrack${NC}  - Проблемы с conntrack и приемом NetFlow/sFlow"
+    echo -e "  ${YELLOW}clickhouse${NC} - Проблемы с ClickHouse"
+    echo -e "  ${YELLOW}dns${NC}        - Проблемы с DNS"
+    echo -e "  ${YELLOW}jmx${NC}        - Конфликт JMX портов"
+    echo -e "  ${YELLOW}kafka${NC}      - Проблемы с Kafka"
+    echo
+    echo -e "${BOLD}Примеры:${NC}"
+    echo -e "  run install             ${CYAN}# Установка Akvorado${NC}"
+    echo -e "  run start               ${CYAN}# Запуск всех сервисов${NC}"
+    echo -e "  run debug               ${CYAN}# Диагностика системы${NC}"
+    echo -e "  run fix conntrack       ${CYAN}# Исправление проблем с conntrack${NC}"
+    echo -e "  run kafka-topic list    ${CYAN}# Список топиков Kafka${NC}"
+    echo -e "  run logs akvorado-inlet ${CYAN}# Просмотр логов inlet${NC}"
+    echo -e "  run test tcpdump        ${CYAN}# Запуск tcpdump для мониторинга трафика${NC}"
+    echo -e "  run test softflowd      ${CYAN}# Запуск softflowd для генерации тестовых данных${NC}"
+    echo -e "  run enable-geoip        ${CYAN}# Включение GeoIP функциональности${NC}"
+}
+
+# Функция отображения результата команды
+print_status() {
+  if [ $1 -eq 0 ]; then
+    echo -e "[ ${GREEN}OK${NC} ] $2"
+  else
+    echo -e "[${RED}ОШИБКА${NC}] $2"
+    if [ -n "$3" ]; then
+      echo -e "${YELLOW}Решение:${NC} $3"
+    fi
+  fi
+}
+
+# Функция для проверки наличия docker-compose файла
+check_docker_compose_file() {
+    local compose_files=()
+    if [ -f "$PROJECT_DIR/akvorado/docker-compose.yml" ]; then
+        compose_files+=("$PROJECT_DIR/akvorado/docker-compose.yml")
+    fi
+    
+    if [ -f "$PROJECT_DIR/akvorado/docker/docker-compose.yml" ]; then
+        compose_files+=("$PROJECT_DIR/akvorado/docker/docker-compose.yml")
+    fi
+    
+    if [ ${#compose_files[@]} -eq 0 ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Не найден файл docker-compose.yml" >&2
+        echo -e "Проверены пути: ${YELLOW}$PROJECT_DIR/akvorado/docker-compose.yml${NC} и ${YELLOW}$PROJECT_DIR/akvorado/docker/docker-compose.yml${NC}" >&2
+        return 1
+    else
+        echo -e "[ ${GREEN}OK${NC} ] Найден файл docker-compose: ${YELLOW}${compose_files[0]}${NC}" >&2
+        # Возвращаем только путь к файлу через echo без дополнительного текста
+        echo "${compose_files[0]}"
+        return 0
+    fi
+}
+
+# Функция для установки пакета
+install_package() {
+    local package=$1
+    
+    # Проверяем, установлен ли уже пакет
+    if dpkg -l | grep -q "^ii  $package" || rpm -q "$package" 2>/dev/null; then
+        return 0 # Пакет уже установлен
+    fi
+    
+    echo -e "${YELLOW}Установка пакета $package...${NC}"
+    
+    # Определение менеджера пакетов
+    if command -v apt-get &> /dev/null; then
+        apt-get update -qq && apt-get install -y $package
+    elif command -v yum &> /dev/null; then
+        yum install -y $package
+    elif command -v dnf &> /dev/null; then
+        dnf install -y $package
+    elif command -v pacman &> /dev/null; then
+        pacman -S --noconfirm $package
+    elif command -v zypper &> /dev/null; then
+        zypper install -y $package
+    else
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось определить менеджер пакетов"
+        return 1
+    fi
+    
+    if [ $? -eq 0 ]; then
+        echo -e "[ ${GREEN}OK${NC} ] Пакет $package успешно установлен"
+        return 0
+    else
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось установить пакет $package"
+        return 1
+    fi
+}
+
+# Проверка наличия необходимых утилит
+check_dependencies() {
+    echo -e "${BLUE}Проверка зависимостей...${NC}"
+    
+    local missing=0
+    local installed=0
+    
+    # Карта соответствия команд и пакетов
+    declare -A package_map
+    package_map["docker"]="docker.io"
+    package_map["curl"]="curl"
+    package_map["tar"]="tar"
+    package_map["wget"]="wget"
+    package_map["nc"]="netcat"
+    package_map["ping"]="iputils-ping"
+    package_map["conntrack"]="conntrack"
+    
+    for cmd in docker curl tar wget nc ping conntrack; do
+        if ! command -v $cmd &> /dev/null; then
+            install_package "${package_map[$cmd]}"
+            if [ $? -eq 0 ]; then
+                installed=$((installed+1))
+            else
+                echo -e "[${RED}ОШИБКА${NC}] Не установлена утилита: $cmd"
+                missing=$((missing+1))
+            fi
+        fi
+    done
+    
+    # Проверка docker-compose
+    if ! command -v docker-compose &> /dev/null && ! command -v docker &> /dev/null; then
+        echo -e "${YELLOW}Установка docker-compose...${NC}"
+        # Установка docker-compose
+        curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+        if [ $? -eq 0 ]; then
+            echo -e "[ ${GREEN}OK${NC} ] Утилита docker-compose установлена"
+            installed=$((installed+1))
+        else
+            echo -e "[${RED}ОШИБКА${NC}] Не удалось установить docker-compose"
+            missing=$((missing+1))
+        fi
+    fi
+    
+    # Проверка softflowd (используется для генерации тестовых данных)
+    if ! command -v softflowd &> /dev/null && [[ "$1" == "test" ]]; then
+        install_package "softflowd"
+        if [ $? -eq 0 ]; then
+            installed=$((installed+1))
+        else
+            echo -e "[${RED}ОШИБКА${NC}] Не установлена утилита: softflowd"
+            missing=$((missing+1))
+        fi
+    fi
+    
+    # Проверка snmpd (используется для SNMP)
+    if ! command -v snmpd &> /dev/null && [[ "$1" == "snmp" ]]; then
+        install_package "snmpd"
+        install_package "snmp"
+        if [ $? -eq 0 ]; then
+            installed=$((installed+1))
+        else
+            echo -e "[${RED}ОШИБКА${NC}] Не установлены утилиты: snmpd и snmp"
+            missing=$((missing+1))
+        fi
+    fi
+    
+    if [ $missing -ne 0 ]; then
+        echo -e "${RED}Не удалось установить $missing зависимостей.${NC}"
+        return 1
+    fi
+    
+    if [ $installed -gt 0 ]; then
+        echo -e "${GREEN}Установлено $installed новых зависимостей.${NC}"
+    fi
+    
+    echo -e "${GREEN}Все необходимые зависимости установлены.${NC}"
+    return 0
+}
+
+# Функция для проверки и отключения демо-режима
+disable_demo_mode() {
+    echo -e "${BLUE}Проверка и отключение демо-режима Akvorado...${NC}"
+    cd "$PROJECT_DIR/akvorado"
+    
+    local demo_mode_enabled=false
+    local env_updated=false
+    local config_updated=false
+    
+    # Проверка .env файла на наличие демо-режима
+    if [ -f ".env" ]; then
+        echo -e "${BLUE}Проверка .env файла...${NC}"
+        
+        # Проверка на наличие демо-файла в COMPOSE_FILE
+        if grep -q "docker-compose-demo.yml" ".env"; then
+            echo -e "${YELLOW}Обнаружен демо-режим в .env файле.${NC}"
+            demo_mode_enabled=true
+            
+            # Закомментировать строку с docker-compose-demo.yml
+            sed -i 's/COMPOSE_FILE=${COMPOSE_FILE}:docker\/docker-compose-demo.yml/#COMPOSE_FILE=${COMPOSE_FILE}:docker\/docker-compose-demo.yml/g' ".env"
+            
+            if [ $? -eq 0 ]; then
+                echo -e "[ ${GREEN}OK${NC} ] Демо-режим отключен в .env файле"
+                env_updated=true
+            else
+                echo -e "[${RED}ОШИБКА${NC}] Не удалось отключить демо-режим в .env файле"
+            fi
+        else
+            echo -e "[ ${GREEN}OK${NC} ] Демо-режим не обнаружен в .env файле"
+        fi
+    else
+        echo -e "[${RED}ОШИБКА${NC}] Файл .env не найден"
+    fi
+    
+    # Проверка config/akvorado.yaml файла на наличие демо-режима
+    if [ -f "config/akvorado.yaml" ]; then
+        echo -e "${BLUE}Проверка config/akvorado.yaml файла...${NC}"
+        
+        # Проверка на наличие demo-exporter в конфигурации
+        if grep -q "demo-exporter: !include \"demo.yaml\"" "config/akvorado.yaml"; then
+            echo -e "${YELLOW}Обнаружен демо-режим в config/akvorado.yaml.${NC}"
+            demo_mode_enabled=true
+            
+            # Закомментировать строку с demo-exporter
+            sed -i 's/^demo-exporter: !include "demo.yaml"$/# demo-exporter: !include "demo.yaml"/g' "config/akvorado.yaml"
+            
+            if [ $? -eq 0 ]; then
+                echo -e "[ ${GREEN}OK${NC} ] Демо-режим отключен в config/akvorado.yaml"
+                config_updated=true
+            else
+                echo -e "[${RED}ОШИБКА${NC}] Не удалось отключить демо-режим в config/akvorado.yaml"
+            fi
+        else
+            echo -e "[ ${GREEN}OK${NC} ] Демо-режим не обнаружен в config/akvorado.yaml"
+        fi
+    else
+        echo -e "[${RED}ОШИБКА${NC}] Файл config/akvorado.yaml не найден"
+    fi
+    
+    if [ "$demo_mode_enabled" = false ]; then
+        echo -e "${GREEN}Демо-режим не обнаружен.${NC}"
+        return 0
+    fi
+    
+    # Если были внесены изменения, предложить перезапустить Akvorado
+    if [ "$env_updated" = true ] || [ "$config_updated" = true ]; then
+        echo -e "${GREEN}Демо-режим успешно отключен.${NC}"
+        echo -e "${YELLOW}Рекомендуется перезапустить Akvorado для применения изменений.${NC}"
+        read -p "Перезапустить сейчас? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            restart_akvorado
+        else
+            echo -e "${YELLOW}Не забудьте перезапустить Akvorado позже:${NC} run restart"
+        fi
+    else
+        echo -e "${YELLOW}Изменения не были внесены. Проверьте конфигурацию вручную.${NC}"
+    fi
+}
+
+# Установка Akvorado
+install_akvorado() {
+    echo -e "${BLUE}Настройка Akvorado...${NC}"
+    
+    # Проверка зависимостей
+    check_dependencies
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Невозможно продолжить установку из-за отсутствия необходимых зависимостей.${NC}"
+        return 1
+    fi
+    
+    cd "$PROJECT_DIR/akvorado"
+    
+    # Проверка структуры проекта
+    echo -e "${BLUE}Проверка структуры проекта...${NC}"
+    if [ ! -d "config" ] || [ ! -d "docker" ]; then
+        echo -e "${RED}Каталоги config или docker не найдены. Убедитесь, что вы находитесь в корректной директории проекта.${NC}"
+        return 1
+    fi
+    
+    # Проверка/создание .env файла
+    if [ ! -f ".env" ]; then
+        echo -e "${YELLOW}Файл .env не найден. Создаем...${NC}"
+        cp ".env.example" ".env" 2>/dev/null || touch ".env"
+    fi
+    
+    # Редактирование .env файла
+    echo -e "${BLUE}Настройка .env файла...${NC}"
+    if grep -q "docker-compose-demo.yml" ".env"; then
+        echo -e "${YELLOW}Отключение демо-режима: комментирование строки с docker-compose-demo.yml в .env...${NC}"
+        sed -i 's/COMPOSE_FILE=${COMPOSE_FILE}:docker\/docker-compose-demo.yml/#COMPOSE_FILE=${COMPOSE_FILE}:docker\/docker-compose-demo.yml/g' ".env"
+    fi
+    
+    # Отключение демо-режима в конфигурации
+    if [ -f "config/akvorado.yaml" ]; then
+        echo -e "${BLUE}Отключение демо-режима в config/akvorado.yaml...${NC}"
+        if grep -q "demo-exporter: !include \"demo.yaml\"" "config/akvorado.yaml"; then
+            sed -i 's/^demo-exporter: !include "demo.yaml"$/# demo-exporter: !include "demo.yaml"/g' "config/akvorado.yaml"
+            echo -e "[ ${GREEN}OK${NC} ] Демо-режим отключен в конфигурации"
+        fi
+    fi
+    
+    # Исправление JMX порта в docker-compose.yml
+    echo -e "${BLUE}Проверка файла docker-compose.yml...${NC}"
+    local docker_compose_file=$(check_docker_compose_file)
+    
+    if [ $? -eq 0 ] && [ -n "$docker_compose_file" ]; then
+        if grep -q "JMX_PORT=5555" "$docker_compose_file"; then
+            echo -e "${YELLOW}Изменение JMX_PORT с 5555 на 5556 в docker-compose.yml...${NC}"
+            sed -i 's/JMX_PORT=5555/JMX_PORT=5556/g' "$docker_compose_file"
+            echo -e "[ ${GREEN}OK${NC} ] JMX порт успешно изменен"
+        else
+            echo -e "[ ${GREEN}OK${NC} ] JMX порт уже настроен правильно"
+        fi
+    fi
+    
+    echo -e "${GREEN}Настройка Akvorado завершена.${NC}"
+    echo -e "${YELLOW}Для запуска выполните:${NC} run start"
+    echo -e "${YELLOW}После запуска веб-интерфейс будет доступен по адресу:${NC} http://${EXTERNAL_NETWORK_IP}:${WEB_UI_PORT}"
+}
+
+# Запуск Akvorado
+start_akvorado() {
+    echo -e "${BLUE}Запуск Akvorado...${NC}"
+    cd "$PROJECT_DIR/akvorado"
+    
+    # Проверка наличия docker-compose файла
+    if ! check_docker_compose_file > /dev/null; then
+        echo -e "${RED}Не удалось найти файл docker-compose.yml.${NC}"
+        return 1
+    fi
+    
+    # Проверка и исправление конфликтов портов перед запуском
+    echo -e "${BLUE}Проверка доступности портов...${NC}"
+    local is_port_free=true
+    if command -v netstat &> /dev/null; then
+        if netstat -tuln | grep -q ":$TRAEFIK_PORT\s"; then
+            is_port_free=false
+        fi
+    elif command -v ss &> /dev/null; then
+        if ss -tuln | grep -q ":$TRAEFIK_PORT\s"; then
+            is_port_free=false
+        fi
+    else
+        # Простая проверка через проверку соединения
+        (echo > /dev/tcp/127.0.0.1/$TRAEFIK_PORT) &>/dev/null
+        if [ $? -eq 0 ]; then
+            is_port_free=false
+        fi
+    fi
+    
+    if [ "$is_port_free" = false ]; then
+        echo -e "${YELLOW}Обнаружен конфликт портов. Автоматическое исправление...${NC}"
+        echo -e "${YELLOW}Возможно, проблема с DNS. Попробуйте:${NC} run fix dns"
+        return 1
+    fi
+    
+    # Запуск Zookeeper
+    echo -e "${BLUE}Запуск Zookeeper...${NC}"
+    docker compose up -d zookeeper
+    local zk_status=$?
+    if [ $zk_status -ne 0 ]; then
+        echo -e "${RED}Ошибка запуска Zookeeper. Проверьте логи:${NC} run logs zookeeper"
+        return 1
+    fi
+    echo -e "${YELLOW}Ожидание инициализации Zookeeper ($ZOOKEEPER_WAIT_TIME сек.)...${NC}"
+    sleep $ZOOKEEPER_WAIT_TIME
+    
+    # Запуск Kafka
+    echo -e "${BLUE}Запуск Kafka...${NC}"
+    docker compose up -d kafka
+    local kafka_status=$?
+    if [ $kafka_status -ne 0 ]; then
+        echo -e "${RED}Ошибка запуска Kafka. Проверьте логи:${NC} run logs kafka"
+        return 1
+    fi
+    echo -e "${YELLOW}Ожидание инициализации Kafka ($KAFKA_WAIT_TIME сек.)...${NC}"
+    sleep $KAFKA_WAIT_TIME
+    
+    # Запуск остальных сервисов
+    echo -e "${BLUE}Запуск остальных сервисов...${NC}"
+    docker compose up -d
+    local services_status=$?
+    if [ $services_status -ne 0 ]; then
+        echo -e "${RED}Возникла ошибка при запуске некоторых сервисов.${NC}"
+        echo -e "${YELLOW}Возможно, проблема с занятыми портами. Попробуйте:${NC} run fix ports"
+        return 1
+    fi
+    
+    # Проверка статуса
+    echo -e "${GREEN}Akvorado запущен. Для проверки статуса выполните:${NC} run status"
+    echo -e "${YELLOW}Веб-интерфейс Akvorado будет доступен по адресу:${NC} http://${EXTERNAL_NETWORK_IP}:${WEB_UI_PORT} (порт ${WEB_UI_PORT})"
+}
+
+# Остановка Akvorado
+stop_akvorado() {
+    echo -e "${BLUE}Остановка Akvorado...${NC}"
+    cd "$PROJECT_DIR/akvorado"
+    docker compose stop
+    echo -e "${GREEN}Akvorado остановлен.${NC}"
+}
+
+# Перезапуск Akvorado
+restart_akvorado() {
+    echo -e "${BLUE}Перезапуск Akvorado...${NC}"
+    stop_akvorado
+    start_akvorado
+}
+
+# Проверка статуса Akvorado
+check_status() {
+    echo -e "${BLUE}Проверка статуса Akvorado...${NC}"
+    cd "$PROJECT_DIR/akvorado"
+    
+    # Проверка наличия docker-compose.yml
+    local docker_compose_file=$(check_docker_compose_file)
+    [ $? -ne 0 ] && return 1
+    
+    # Проверка контейнеров
+    echo -e "${BLUE}Статус контейнеров:${NC}"
+    docker compose ps
+    
+    # Проверка наличия веб-интерфейса
+    echo
+    echo -e "${BLUE}Проверка веб-интерфейса (порт ${WEB_UI_PORT}):${NC}"
+    local status_code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEB_UI_PORT")
+    if [ "$status_code" = "200" ]; then
+        echo -e "[ ${GREEN}OK${NC} ] Веб-интерфейс доступен по адресу: ${YELLOW}http://${EXTERNAL_NETWORK_IP}:${WEB_UI_PORT}${NC} (статус: $status_code)"
+    else
+        echo -e "[${RED}ОШИБКА${NC}] Веб-интерфейс недоступен на порту $WEB_UI_PORT (статус: $status_code)"
+        echo -e "${YELLOW}Возможные причины:${NC}"
+        echo -e "  1. Сервисы Akvorado не запущены или не завершили инициализацию"
+        echo -e "  2. Порт $WEB_UI_PORT занят другим приложением"
+        echo -e "  3. Проблемы с сетевыми настройками Docker"
+    fi
+}
+
+# Просмотр логов
+view_logs() {
+    cd "$PROJECT_DIR/akvorado"
+    
+    local service=$1
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}Просмотр логов всех сервисов:${NC}"
+        docker compose logs -f
+    else
+        echo -e "${BLUE}Просмотр логов сервиса $service:${NC}"
+        docker compose logs -f "$service"
+    fi
+}
+
+# Генерация тестовых данных
+generate_test_data() {
+    local test_type=$1
+    
+    case "$test_type" in
+        tcpdump)
+            echo -e "${BLUE}Запуск tcpdump для мониторинга NetFlow/sFlow трафика...${NC}"
+            echo -e "${YELLOW}Для остановки нажмите Ctrl+C${NC}"
+            tcpdump -i any port $NETFLOW_PORT or port $SFLOW_PORT or port $IPFIX_PORT -n
+            ;;
+            
+        softflowd)
+            echo -e "${BLUE}Запуск softflowd для генерации тестовых данных NetFlow...${NC}"
+            
+            # Проверка и установка softflowd
+            if ! command -v softflowd &> /dev/null; then
+                check_dependencies "test"
+            fi
+            
+            # Остановка любых существующих экземпляров softflowd
+            echo -e "${BLUE}Остановка существующих экземпляров softflowd...${NC}"
+            pkill softflowd 2>/dev/null || true
+            
+            # Запуск softflowd для генерации NetFlow данных
+            echo -e "${BLUE}Запуск softflowd для генерации NetFlow данных...${NC}"
+            echo -e "${YELLOW}Для остановки нажмите Ctrl+C${NC}"
+            echo -e "${YELLOW}Выполняем:${NC} $SOFTFLOW_START_CMD"
+            $SOFTFLOW_START_CMD
+            ;;
+            
+        *)
+            echo -e "${RED}Неизвестный тип теста:${NC} $test_type"
+            echo -e "${YELLOW}Доступные типы тестов:${NC} tcpdump, softflowd"
+            return 1
+            ;;
+    esac
+}
+
+# Диагностика
+run_diagnostics() {
+    echo -e "${BLUE}Запуск диагностики Akvorado...${NC}"
+    cd "$SCRIPT_DIR"
+    
+    # Запуск скрипта диагностики
+    chmod +x ./check
+    ./check
+}
+
+# Функция для исправления проблем с Kafka
+fix_kafka_problem() {
+    echo -e "${BLUE}Исправление проблем с Kafka...${NC}"
+    cd "$PROJECT_DIR/akvorado"
+    
+    echo -e "${YELLOW}Перезапуск Zookeeper и Kafka...${NC}"
+    docker compose stop kafka zookeeper
+    local stop_status=$?
+    docker compose rm -f kafka zookeeper
+    local rm_status=$?
+    
+    if [ $stop_status -ne 0 ] || [ $rm_status -ne 0 ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось остановить или удалить контейнеры Kafka и Zookeeper"
+        return 1
+    fi
+    
+    echo -e "${BLUE}Запуск Zookeeper...${NC}"
+    docker compose up -d zookeeper
+    local zk_status=$?
+    
+    if [ $zk_status -ne 0 ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось запустить Zookeeper"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}Ожидание инициализации Zookeeper ($ZOOKEEPER_WAIT_TIME сек.)...${NC}"
+    sleep $ZOOKEEPER_WAIT_TIME
+    
+    echo -e "${BLUE}Запуск Kafka...${NC}"
+    docker compose up -d kafka
+    local kafka_status=$?
+    
+    if [ $kafka_status -ne 0 ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось запустить Kafka"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}Ожидание инициализации Kafka ($KAFKA_WAIT_TIME сек.)...${NC}"
+    sleep $KAFKA_WAIT_TIME
+    
+    echo -e "${BLUE}Проверка наличия топика $KAFKA_TOPIC...${NC}"
+    # Получаем имя контейнера Kafka
+    local kafka_container=$(docker compose ps -q kafka)
+    
+    if [ -z "$kafka_container" ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось найти контейнер Kafka"
+        return 1
+    fi
+    
+    # Проверяем наличие топика
+    local topic_exists=$(docker exec $kafka_container env -u JMX_PORT kafka-topics.sh --bootstrap-server kafka:$KAFKA_PORT --list | grep -c "$KAFKA_TOPIC")
+    
+    if [ $? -ne 0 ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось проверить наличие топика"
+        return 1
+    fi
+    
+    if [ "$topic_exists" -eq 0 ]; then
+        echo -e "${YELLOW}Создание топика $KAFKA_TOPIC...${NC}"
+        docker exec $kafka_container env -u JMX_PORT kafka-topics.sh --bootstrap-server kafka:$KAFKA_PORT --create --topic "$KAFKA_TOPIC" --replication-factor 1 --partitions 8
+        
+        if [ $? -ne 0 ]; then
+            echo -e "[${RED}ОШИБКА${NC}] Не удалось создать топик $KAFKA_TOPIC"
+            return 1
+        fi
+    else
+        echo -e "[ ${GREEN}OK${NC} ] Топик $KAFKA_TOPIC уже существует"
+    fi
+    
+    echo -e "${BLUE}Перезапуск остальных сервисов...${NC}"
+    docker compose up -d
+    local startup_status=$?
+    
+    if [ $startup_status -ne 0 ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Возникли проблемы при запуске одного или нескольких сервисов"
+        echo -e "${YELLOW}Проверьте логи с помощью команды:${NC} run logs"
+        return 1
+    fi
+    
+    echo -e "${GREEN}Kafka перезапущена и переконфигурирована.${NC}"
+    return 0
+}
+
+# Исправление проблем
+fix_problem() {
+    local problem=$1
+    case "$problem" in
+        conntrack)
+            echo -e "${BLUE}Исправление проблем с conntrack...${NC}"
+            echo -e "${YELLOW}Сброс таблицы conntrack для UDP портов...${NC}"
+            
+            # Проверка наличия conntrack
+            if ! command -v conntrack &> /dev/null; then
+                check_dependencies
+            fi
+            
+            echo -e "${BLUE}Сброс conntrack для порта $NETFLOW_PORT...${NC}"
+            $CONNTRACK_RESET_CMD $NETFLOW_PORT
+            
+            echo -e "${BLUE}Сброс conntrack для порта $SFLOW_PORT...${NC}"
+            $CONNTRACK_RESET_CMD $SFLOW_PORT
+            
+            echo -e "${BLUE}Сброс conntrack для порта $IPFIX_PORT...${NC}"
+            $CONNTRACK_RESET_CMD $IPFIX_PORT
+            
+            echo -e "${GREEN}Таблица conntrack сброшена для всех портов.${NC}"
+            ;;
+        clickhouse)
+            echo -e "${BLUE}Исправление проблем с ClickHouse...${NC}"
+            cd "$PROJECT_DIR/akvorado"
+            
+            echo -e "${YELLOW}Перезапуск ClickHouse...${NC}"
+            docker compose stop clickhouse
+            docker compose rm -f clickhouse
+            
+            echo -e "${BLUE}Запуск ClickHouse...${NC}"
+            docker compose up -d clickhouse
+            echo -e "${YELLOW}Ожидание инициализации ClickHouse...${NC}"
+            sleep $OTHER_SERVICES_WAIT_TIME
+            
+            echo -e "${BLUE}Перезапуск Orchestrator для создания таблиц...${NC}"
+            docker compose restart akvorado-orchestrator
+            
+            echo -e "${GREEN}ClickHouse перезапущен и переконфигурирован.${NC}"
+            ;;
+        dns)
+            echo -e "${BLUE}Исправление проблем с DNS...${NC}"
+            echo -e "${YELLOW}Создание пользовательской сети Docker...${NC}"
+            docker network create --driver bridge --subnet=172.20.0.0/16 --gateway=172.20.0.1 "$DOCKER_NETWORK" || true
+            
+            echo -e "${YELLOW}Редактирование docker-compose.yml для использования этой сети...${NC}"
+            local docker_compose_file=$(check_docker_compose_file)
+            [ $? -ne 0 ] && return 1
+            
+            # Добавление настройки сети, если еще не существует
+            if ! grep -q "networks:" "$docker_compose_file"; then
+                cat << EOF >> "$docker_compose_file"
+networks:
+  default:
+    external:
+      name: $DOCKER_NETWORK
+EOF
+                echo -e "[ ${GREEN}OK${NC} ] Настройки сети добавлены в docker-compose.yml"
+            else
+                echo -e "[ ${GREEN}OK${NC} ] Настройки сети уже существуют в docker-compose.yml"
+            fi
+            
+            echo -e "${GREEN}Настройка сети Docker выполнена успешно.${NC}"
+            echo -e "${YELLOW}Для применения изменений необходимо перезапустить сервисы:${NC} run restart"
+            ;;
+        jmx)
+            echo -e "${BLUE}Исправление проблем с JMX портом...${NC}"
+            local docker_compose_file=$(check_docker_compose_file)
+            [ $? -ne 0 ] && return 1
+            
+            if grep -q "JMX_PORT=5555" "$docker_compose_file"; then
+                echo -e "${YELLOW}Изменение JMX_PORT с 5555 на 5556 в docker-compose.yml...${NC}"
+                sed -i 's/JMX_PORT=5555/JMX_PORT=5556/g' "$docker_compose_file"
+                echo -e "[ ${GREEN}OK${NC} ] JMX порт изменен с 5555 на 5556"
+                echo -e "${YELLOW}Перезапуск сервисов...${NC}"
+                restart_akvorado
+            else
+                echo -e "[ ${GREEN}OK${NC} ] JMX порт уже настроен правильно (не 5555)"
+            fi
+            ;;
+        kafka)
+            fix_kafka_problem
+            ;;
+        *)
+            echo -e "${RED}Неизвестная проблема:${NC} $problem"
+            echo -e "${YELLOW}Доступные проблемы:${NC} dns, jmx, conntrack, kafka, clickhouse"
+            return 1
+            ;;
+    esac
+}
+
+# Установка и настройка SNMP
+setup_snmp() {
+    echo -e "${BLUE}Установка и настройка SNMP...${NC}"
+    
+    # Проверка наличия snmpd
+    if ! command -v snmpd &> /dev/null; then
+        check_dependencies "snmp"
+    fi
+    
+    # Создание резервной копии конфигурации
+    echo -e "${BLUE}Создание резервной копии конфигурации SNMP...${NC}"
+    cp "$SNMP_CONF" "$SNMP_CONF.backup"
+    
+    # Создание новой конфигурации
+    echo -e "${BLUE}Создание новой конфигурации SNMP...${NC}"
+    cat << EOF > "$SNMP_CONF"
+# Прослушивание на всех интерфейсах
+agentAddress udp:161,udp6:[::1]:161
+
+# Доступ по SNMP v2c
+rocommunity $SNMP_COMMUNITY localhost
+rocommunity $SNMP_COMMUNITY $DOCKER_NETWORK_SUBNET
+
+# Доступ по SNMP v3
+createUser $SNMP_V3_USER SHA $SNMP_V3_AUTH_PASS AES $SNMP_V3_PRIV_PASS
+rouser $SNMP_V3_USER authpriv
+
+# Системная информация
+sysLocation    Salt
+sysContact     i8megabit@gmail.com
+sysName        localhost
+
+# Включение мониторинга интерфейсов
+view systemview included .1.3.6.1.2.1.1
+view systemview included .1.3.6.1.2.1.2
+view systemview included .1.3.6.1.2.1.25.1.1
+EOF
+    
+    # Перезапуск SNMP демона
+    echo -e "${BLUE}Перезапуск SNMP демона...${NC}"
+    systemctl restart snmpd
+    
+    # Проверка статуса
+    echo -e "${BLUE}Проверка статуса SNMP...${NC}"
+    if systemctl is-active --quiet snmpd; then
+        echo -e "[ ${GREEN}OK${NC} ] SNMP демон запущен"
+    else
+        echo -e "[${RED}ОШИБКА${NC}] Не удалось запустить SNMP демон"
+        return 1
+    fi
+    
+    # Тестирование SNMP
+    echo -e "${BLUE}Тестирование SNMP...${NC}"
+    if snmpwalk -v 2c -c "$SNMP_COMMUNITY" localhost "$SNMP_OID" &>/dev/null; then
+        echo -e "[ ${GREEN}OK${NC} ] SNMP v2c работает"
+    else
+        echo -e "[${RED}ОШИБКА${NC}] SNMP v2c не работает"
+    fi
+    
+    if snmpwalk -v 3 -u "$SNMP_V3_USER" -l authPriv -a SHA -A "$SNMP_V3_AUTH_PASS" -x AES -X "$SNMP_V3_PRIV_PASS" localhost "$SNMP_OID" &>/dev/null; then
+        echo -e "[ ${GREEN}OK${NC} ] SNMP v3 работает"
+    else
+        echo -e "[${RED}ОШИБКА${NC}] SNMP v3 не работает"
+    fi
+    
+    echo -e "${GREEN}Установка и настройка SNMP завершена.${NC}"
+    echo -e "${YELLOW}Необходимо перезапустить Akvorado:${NC} run restart"
+}
+
+# Выполнение запроса к ClickHouse
+execute_db_query() {
+    local query=$1
+    
+    if [ -z "$query" ]; then
+        echo -e "${BLUE}Доступные таблицы в базе данных $CLICKHOUSE_DB:${NC}"
+        docker exec -it $(docker ps -q --filter "name=clickhouse") clickhouse-client --query="SHOW TABLES FROM $CLICKHOUSE_DB"
+        
+        echo -e "\n${BLUE}Пример последних записей из таблицы $CLICKHOUSE_TABLE:${NC}"
+        docker exec -it $(docker ps -q --filter "name=clickhouse") clickhouse-client --query="SELECT TimeReceived, SrcAddr, DstAddr, BytesIn, BytesOut, PacketsIn, PacketsOut FROM $CLICKHOUSE_DB.$CLICKHOUSE_TABLE ORDER BY TimeReceived DESC LIMIT 10"
+    else
+        echo -e "${BLUE}Выполнение запроса:${NC} $query"
+        docker exec -it $(docker ps -q --filter "name=clickhouse") clickhouse-client --query="$query"
+    fi
+}
+
+# Управление топиками Kafka
+manage_kafka_topic() {
+    local cmd=$1
+    local topic=$2
+    
+    # Если топик не указан, используем стандартный
+    if [ -z "$topic" ]; then
+        topic=$KAFKA_TOPIC
+    fi
+    
+    case "$cmd" in
+        list)
+            echo -e "${BLUE}Список топиков Kafka:${NC}"
+            docker exec -it $(docker ps -q --filter "name=kafka") env -u JMX_PORT kafka-topics.sh --bootstrap-server kafka:$KAFKA_PORT --list
+            ;;
+            
+        describe)
+            echo -e "${BLUE}Описание топика $topic:${NC}"
+            docker exec -it $(docker ps -q --filter "name=kafka") env -u JMX_PORT kafka-topics.sh --bootstrap-server kafka:$KAFKA_PORT --describe --topic "$topic"
+            ;;
+            
+        create)
+            echo -e "${BLUE}Создание топика $topic:${NC}"
+            docker exec -it $(docker ps -q --filter "name=kafka") env -u JMX_PORT kafka-topics.sh --bootstrap-server kafka:$KAFKA_PORT --create --topic "$topic" --replication-factor 1 --partitions 8
+            ;;
+            
+        consume)
+            echo -e "${BLUE}Просмотр сообщений из топика $topic:${NC}"
+            docker exec -it $(docker ps -q --filter "name=kafka") env -u JMX_PORT kafka-console-consumer.sh --bootstrap-server kafka:$KAFKA_PORT --topic "$topic" --from-beginning --max-messages 5
+            ;;
+            
+        *)
+            echo -e "${RED}Неизвестная команда:${NC} $cmd"
+            echo -e "${YELLOW}Доступные команды:${NC} list, describe, create, consume"
+            return 1
+            ;;
+    esac
+}
+
+# Функция для включения GeoIP
+enable_geoip() {
+    echo -e "${BLUE}Включение GeoIP функциональности...${NC}"
+    cd "$PROJECT_DIR/akvorado"
+    
+    # Проверка наличия конфигурационного файла и создание резервной копии
+    if [ ! -f "config/akvorado.yaml" ]; then
+        echo -e "[${RED}ОШИБКА${NC}] Файл config/akvorado.yaml не найден"
+        return 1
+    fi
+    cp "config/akvorado.yaml" "config/akvorado.yaml.backup"
+    
+    # Раскомментирование путей к базам GeoIP и настройка optional: true
+    sed -i '/geoip:/,/servers:/ {
+        s/^  #asn-database:/  asn-database:/
+        s/^  #geo-database:/  geo-database:/
+        s/^    #- \/usr\/share\/GeoIP\/asn.mmdb/    - \/usr\/share\/GeoIP\/asn.mmdb/
+        s/^    #- \/usr\/share\/GeoIP\/country.mmdb/    - \/usr\/share\/GeoIP\/country.mmdb/
+        /geoip:/ {
+            /optional: true/! {
+                s/geoip:/geoip:\n  optional: true/
+            }
+        }
+    }' "config/akvorado.yaml"
+    
+    # Активация GeoIP провайдера в .env
+    if [ -f ".env" ]; then
+        sed -i 's/^#COMPOSE_FILE=${COMPOSE_FILE}:docker\/docker-compose-ipinfo.yml/COMPOSE_FILE=${COMPOSE_FILE}:docker\/docker-compose-ipinfo.yml/' ".env"
+    fi
+    
+    echo -e "[ ${GREEN}OK${NC} ] Настройки GeoIP обновлены"
+    echo -e "${YELLOW}Рекомендации:${NC}"
+    echo -e "1. Убедитесь, что базы GeoIP доступны по указанным путям"
+    echo -e "2. Для MaxMind укажите учетные данные в .env файле"
+    
+    read -p "Перезапустить оркестратор сейчас? (y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        docker restart akvorado-orchestrator
+        echo -e "[ ${GREEN}OK${NC} ] Оркестратор перезапущен"
+    fi
+}
+
+# Удаление всех данных
+clean_data() {
+    echo -e "${RED}Внимание! Эта команда удалит все данные Akvorado!${NC}"
+    read -p "Вы уверены? (y/n): " -n 1 -r
+    echo
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        cd "$PROJECT_DIR/akvorado"
+        
+        # Шаг 1: Остановка всех контейнеров, связанных с akvorado
+        echo -e "${BLUE}Остановка всех связанных контейнеров...${NC}"
+        
+        # Остановка контейнеров через docker-compose
+        docker compose stop
+        
+        # Получаем имена всех контейнеров, относящихся к Akvorado, исключая portainer
+        local all_containers=$(docker ps -a --format "{{.ID}} {{.Names}}" | grep -E "akvorado|docker-" | grep -v "portainer" | awk '{print $1}')
+        if [ ! -z "$all_containers" ]; then
+            echo -e "${YELLOW}Принудительная остановка всех связанных контейнеров...${NC}"
+            for container in $all_containers; do
+                docker stop $container 2>/dev/null || true
+            done
+            echo -e "[ ${GREEN}OK${NC} ] Все контейнеры остановлены"
+        fi
+        
+        # Шаг 2: Удаление контейнеров
+        echo -e "${BLUE}Удаление контейнеров...${NC}"
+        docker compose down -v
+        
+        if [ ! -z "$all_containers" ]; then
+            echo -e "${YELLOW}Принудительное удаление всех связанных контейнеров...${NC}"
+            for container in $all_containers; do
+                docker rm -f $container 2>/dev/null || true
+            done
+            
+            # Проверка, остались ли еще контейнеры Akvorado
+            local remaining_containers=$(docker ps -a --format "{{.ID}} {{.Names}}" | grep -E "akvorado|docker-" | grep -v "portainer" | awk '{print $1}')
+            if [ ! -z "$remaining_containers" ]; then
+                echo -e "${YELLOW}Некоторые контейнеры все еще существуют. Вторая попытка удаления...${NC}"
+                for container in $remaining_containers; do
+                    docker rm -f $container 2>/dev/null || true
+                done
+            fi
+            
+            echo -e "[ ${GREEN}OK${NC} ] Все контейнеры удалены"
+        fi
+        
+        # Проверка, удалены ли все контейнеры, включая redis и traefik
+        local akvorado_containers=$(docker ps -a --format "{{.Names}}" | grep -E "redis|traefik|akvorado|docker-|clickhouse" | grep -v "portainer")
+        if [ ! -z "$akvorado_containers" ]; then
+            echo -e "${YELLOW}Обнаружены оставшиеся контейнеры. Принудительное удаление...${NC}"
+            for container in $akvorado_containers; do
+                docker rm -f $container 2>/dev/null || true
+            done
+        fi
+        
+        # Шаг 3: Проверка наличия остановленных контейнеров, которые могут блокировать тома
+        echo -e "${BLUE}Проверка наличия остановленных контейнеров...${NC}"
+        local stopped_containers=$(docker ps -a -q -f status=exited -f status=created | grep -v "$(docker ps -q -f name=portainer)")
+        if [ ! -z "$stopped_containers" ]; then
+            echo -e "${YELLOW}Найдены остановленные контейнеры, которые могут блокировать тома. Удаление...${NC}"
+            for container in $stopped_containers; do
+                # Проверка, не относится ли контейнер к portainer
+                if ! docker inspect --format='{{.Name}}' $container | grep -q "portainer"; then
+                    echo -e "${BLUE}Удаление остановленного контейнера $container...${NC}"
+                    docker rm -f $container 2>/dev/null || true
+                fi
+            done
+        fi
+        
+        # Шаг 4: Удаление томов Docker
+        echo -e "${BLUE}Удаление томов Docker...${NC}"
+        local all_volumes=$(docker volume ls -q | grep -E 'akvorado|docker_akvorado')
+        if [ ! -z "$all_volumes" ]; then
+            echo -e "${YELLOW}Принудительное удаление всех томов Akvorado...${NC}"
+            for volume in $all_volumes; do
+                echo -e "${BLUE}Удаление тома $volume...${NC}"
+                docker volume rm -f $volume
+                if [ $? -ne 0 ]; then
+                    echo -e "${YELLOW}Не удалось удалить том $volume, пробуем найти и удалить блокирующие контейнеры...${NC}"
+                    
+                    # Проверяем, какие контейнеры могут использовать этот том
+                    local using_containers=$(docker ps -a --filter "volume=$volume" -q)
+                    if [ ! -z "$using_containers" ]; then
+                        echo -e "${YELLOW}Том $volume используется контейнерами. Принудительное удаление контейнеров...${NC}"
+                        for c in $using_containers; do
+                            echo -e "${BLUE}Удаление контейнера $c, блокирующего том $volume...${NC}"
+                            docker rm -f $c
+                        done
+                        # Повторная попытка удаления тома
+                        echo -e "${BLUE}Повторная попытка удаления тома $volume...${NC}"
+                        docker volume rm -f $volume
+                    fi
+                fi
+            done
+            
+            # Проверка наличия неудаленных томов
+            local remaining_volumes=$(docker volume ls -q | grep -E 'akvorado|docker_akvorado')
+            if [ ! -z "$remaining_volumes" ]; then
+                echo -e "${RED}Некоторые тома не удалось удалить:${NC} $remaining_volumes"
+                echo -e "${YELLOW}Попробуйте выполнить следующие команды:${NC}"
+                for vol in $remaining_volumes; do
+                    echo -e "${YELLOW}docker volume rm -f $vol${NC}"
+                done
+                echo -e "${YELLOW}Если это не поможет, перезапустите Docker:${NC}"
+                echo -e "${YELLOW}systemctl restart docker${NC}"
+            else
+                echo -e "[ ${GREEN}OK${NC} ] Все тома успешно удалены"
+            fi
+        else
+            echo -e "[ ${GREEN}OK${NC} ] Тома Akvorado не найдены"
+        fi
+        
+        # Шаг 5: Удаление сетей Docker
+        echo -e "${BLUE}Удаление сетей Docker...${NC}"
+        # Ищем все сети, связанные с Akvorado
+        local networks=$(docker network ls -q --filter "name=akvorado" --filter "name=$DOCKER_NETWORK")
+        if [ ! -z "$networks" ]; then
+            echo -e "${YELLOW}Удаление сетей Akvorado...${NC}"
+            for network in $networks; do
+                docker network rm $network || true
+            done
+        fi
+        
+        # Финальная проверка - остались ли контейнеры или тома
+        local final_containers=$(docker ps -a --format "{{.Names}}" | grep -E "redis|traefik|akvorado|docker-|clickhouse" | grep -v "portainer")
+        local final_volumes=$(docker volume ls -q | grep -E 'akvorado|docker_akvorado')
+        
+        if [ ! -z "$final_containers" ] || [ ! -z "$final_volumes" ]; then
+            echo -e "${YELLOW}После очистки остались следующие элементы:${NC}"
+            if [ ! -z "$final_containers" ]; then
+                echo -e "${YELLOW}Контейнеры:${NC} $final_containers"
+            fi
+            if [ ! -z "$final_volumes" ]; then
+                echo -e "${YELLOW}Тома:${NC} $final_volumes"
+            fi
+            echo -e "${YELLOW}Для полной очистки может потребоваться перезапуск Docker и повторное выполнение команды.${NC}"
+        else
+            echo -e "${GREEN}Все данные Akvorado удалены.${NC}"
+        fi
+        
+        echo -e "${YELLOW}Если сообщения об ошибках продолжают появляться, выполните:${NC}"
+        echo -e "${YELLOW}systemctl restart docker${NC}"
+        echo -e "${YELLOW}и затем повторно запустите:${NC} run clean"
+    else
+        echo -e "${YELLOW}Операция отменена.${NC}"
+    fi
+}
+
+# Главная функция
+main() {
+    local command=$1
+    shift
+    
+    if [ -z "$command" ]; then
+        show_help
+        exit 0
+    fi
+    
+    case "$command" in
+        install)
+            install_akvorado
+            ;;
+            
+        start)
+            start_akvorado
+            ;;
+            
+        stop)
+            stop_akvorado
+            ;;
+            
+        restart)
+            restart_akvorado
+            ;;
+            
+        status)
+            check_status
+            ;;
+            
+        logs)
+            view_logs "$@"
+            ;;
+            
+        test)
+            generate_test_data "$1"
+            ;;
+            
+        debug)
+            run_diagnostics
+            ;;
+            
+        disable-demo)
+            disable_demo_mode
+            ;;
+            
+        enable-geoip)
+            enable_geoip
+            ;;
+            
+        clean)
+            clean_data
+            ;;
+            
+        help)
+            show_help
+            ;;
+            
+        "db-query")
+            execute_db_query "$1"
+            ;;
+            
+        "kafka-topic")
+            manage_kafka_topic "$1" "$2"
+            ;;
+            
+        "fix")
+            fix_problem "$1"
+            ;;
+            
+        "snmp-setup")
+            setup_snmp
+            ;;
+            
+        *)
+            echo -e "${RED}Неизвестная команда:${NC} $command"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Запуск главной функции с параметрами
+main "$@"

@@ -1,0 +1,115 @@
+---
+services:
+  zookeeper:
+    extends:
+      file: versions.yml
+      service: zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+
+  kafka:
+    extends:
+      file: versions.yml
+      service: kafka
+    environment:
+     - KAFKA_CFG_BROKER_ID=1
+     - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+     - KAFKA_CFG_LISTENERS=CLIENT://:9092,EXTERNAL://:9093
+     - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
+     - KAFKA_CFG_ADVERTISED_LISTENERS=CLIENT://kafka:9092,EXTERNAL://localhost:9092
+     - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=CLIENT
+    depends_on:
+      - zookeeper
+    ports:
+      - 127.0.0.1:9092:9093/tcp
+
+  redis:
+    extends:
+      file: versions.yml
+      service: redis
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    ports:
+      - 127.0.0.1:6379:6379/tcp
+
+  postgres:
+    extends:
+      file: versions.yml
+      service: postgres
+    environment:
+      POSTGRESQL_USERNAME: akvorado
+      POSTGRESQL_PASSWORD: akpass
+      POSTGRESQL_DATABASE: akvorado
+    ports:
+      - 127.0.0.1:5432:5432/tcp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akvorado -d akvorado"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mysql:
+    extends:
+      file: versions.yml
+      service: mysql
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+      MARIADB_USER: akvorado
+      MARIADB_PASSWORD: akpass
+      MARIADB_DATABASE: akvorado
+    ports:
+      - 127.0.0.1:3306:3306/tcp
+    healthcheck:
+      test: ['CMD', '/opt/bitnami/scripts/mariadb/healthcheck.sh']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  clickhouse: &clickhouse
+    extends:
+      file: versions.yml
+      service: clickhouse
+    depends_on:
+      - zookeeper
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    cap_add:
+      - SYS_NICE
+    volumes:
+      - ./clickhouse-cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./clickhouse-cluster-1.xml:/etc/clickhouse-server/config.d/cluster-1.xml
+    ports:
+      - 127.0.0.1:8123:8123/tcp
+      - 127.0.0.1:9000:9000/tcp
+  clickhouse-2:
+    <<: *clickhouse
+    volumes:
+      - ./clickhouse-cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./clickhouse-cluster-2.xml:/etc/clickhouse-server/config.d/cluster-2.xml
+    ports:
+      - 127.0.0.1:9001:9000/tcp
+  clickhouse-3:
+    <<: *clickhouse
+    volumes:
+      - ./clickhouse-cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./clickhouse-cluster-3.xml:/etc/clickhouse-server/config.d/cluster-3.xml
+    ports:
+      - 127.0.0.1:9002:9000/tcp
+  clickhouse-4:
+    <<: *clickhouse
+    volumes:
+      - ./clickhouse-cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./clickhouse-cluster-4.xml:/etc/clickhouse-server/config.d/cluster-4.xml
+    ports:
+      - 127.0.0.1:9003:9000/tcp
+
+  srlinux:
+    extends:
+      file: versions.yml
+      service: srlinux
+    privileged: true
+    user: root
+    command: /opt/srlinux/bin/sr_linux
+    ports:
+      - 127.0.0.1:57400:57400/tcp
+      - 127.0.0.1:57401:22/tcp
