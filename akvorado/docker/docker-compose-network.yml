@@ -1,6 +1,0 @@
-# Настройка сети для решения проблем с DNS
-networks:
-  default:
-    external:
-      name: akvorado_default
-      external: true
