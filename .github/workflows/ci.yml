@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: ghcr.io/example/kentavra:latest
+          build-args: |
+            UI_PORT=8000
