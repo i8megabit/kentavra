@@ -49,6 +49,7 @@ show_help() {
     echo -e "  ${GREEN}disable-demo${NC}            - Отключение демо-режима"
     echo -e "  ${GREEN}enable-geoip${NC}            - Включение GeoIP (отключен по умолчанию)"
     echo -e "  ${GREEN}snmp-setup${NC}              - Установка и настройка SNMP"
+    echo -e "  ${GREEN}version${NC}                 - Показать версию скрипта"
     echo -e "  ${GREEN}help${NC}                    - Показать эту справку"
     echo
     echo -e "${BOLD}Доступные проблемы для команды fix:${NC}"
@@ -68,6 +69,11 @@ show_help() {
     echo -e "  run test tcpdump        ${CYAN}# Запуск tcpdump для мониторинга трафика${NC}"
     echo -e "  run test softflowd      ${CYAN}# Запуск softflowd для генерации тестовых данных${NC}"
     echo -e "  run enable-geoip        ${CYAN}# Включение GeoIP функциональности${NC}"
+}
+
+# Показать версию скрипта
+show_version() {
+    echo "Kentavra version $VERSION"
 }
 
 # Функция отображения результата команды
@@ -1103,6 +1109,10 @@ main() {
             fix_problem "$1"
             ;;
             
+        "version")
+            show_version
+            ;;
+
         "snmp-setup")
             setup_snmp
             ;;
