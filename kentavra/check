@@ -198,3 +198,4 @@ echo -e "${YELLOW}1. Kafka/Zookeeper:${NC} Перезапустите конте
 echo -e "${YELLOW}2. Inlet:${NC} $TCPDUMP_CMD, $CONNTRACK_RESET_CMD $NETFLOW_PORT, $SOFTFLOW_START_CMD"
 echo -e "${YELLOW}3. ClickHouse:${NC} docker exec clickhouse clickhouse-client --query=\"SHOW TABLES FROM $CLICKHOUSE_DB\""
 echo -e "${YELLOW}4. Полный сброс:${NC} ./kentavra/run clean && ./kentavra/run install && ./kentavra/run start"
+
