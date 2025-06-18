@@ -20,4 +20,5 @@ jobs:
           push: false
           tags: ghcr.io/example/kentavra:latest
           build-args: |
+            KENTAVRA_VERSION=${{ github.sha }}
             UI_PORT=8000
