@@ -38,3 +38,20 @@
 
 Подробнее о возможностях смотрите в [kentavra/README.md](kentavra/README.md).
 
+
+## Docker образ с UI
+
+Соберите контейнер:
+
+```bash
+docker build -t kentavra-ui --build-arg KENTAVRA_VERSION=$(cat kentavra/env | grep '^VERSION=' | cut -d'"' -f2) .
+```
+
+Запустите его и откройте `http://localhost:8000`:
+
+```bash
+docker run -p 8000:8000 kentavra-ui
+```
+
+На странице видно версию и статус сервисов. Там же можно запускать команды
+оркестратора в пару кликов. Больше деталей в [docs/architecture.md](docs/architecture.md).

@@ -20,7 +20,9 @@ jobs:
       with:
         python-version: '3.11'
     - name: Install dependencies
-      run: pip install pytest coverage
+      run: |
+        pip install -r requirements.txt
+        pip install coverage
     - name: Run tests
       run: coverage run -m pytest
     - name: Report coverage
