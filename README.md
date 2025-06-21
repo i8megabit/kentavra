@@ -9,7 +9,7 @@
 
 # Kentavra
 
-"Кентавра" — это набор скриптов для развертывания Akvorado через Docker.
+"Кентавра" — это набор утилит на Go для развертывания Akvorado через Docker.
 Мы не храним сам Akvorado. Скачайте его отдельно и распакуйте в каталог
 `akvorado` рядом с папкой `kentavra`.
 
@@ -18,7 +18,11 @@
 2. Клонируйте этот репозиторий.
 3. Скачайте [архив Akvorado](https://github.com/akvorado/akvorado/releases)
    и распакуйте его в папку `akvorado`.
-4. Запустите `./kentavra/run install` и затем `./kentavra/run start`.
+4. Соберите Go-версию и запустите её:
+   ```bash
+   make build
+   ./kentavra-go start
+   ```
 
 После запуска веб‑интерфейс будет доступен по порту 8081 на локальной машине.
 
@@ -37,6 +41,7 @@
 ```
 
 Подробнее о возможностях смотрите в [kentavra/README.md](kentavra/README.md).
+Быстрое развёртывание описано в [docs/docker-quickstart.md](docs/docker-quickstart.md).
 
 
 ## Docker образ с UI
