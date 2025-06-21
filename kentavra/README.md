@@ -7,10 +7,10 @@
  ╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝
 ```
 
-# Kentavra v1.2.1
+# Kentavra v2.0.0
 
-Это скриптовый оркестратор для Akvorado. Он автоматизирует запуск
-контейнеров, проверяет зависимости и помогает отладить систему.
+Теперь Kentavra написана на Go. CLI заменил прежний bash‑скрипт и
+позволяет управлять контейнерами Akvorado.
 
 ## Что нужно
 - Linux с Docker и bash
@@ -19,29 +19,29 @@
 
 ## Основные команды
 ```bash
-./run install     # первичная настройка Akvorado
-./run start       # запуск сервисов
-./run stop        # остановка
-./run restart     # перезапуск
-./run status      # текущий статус
-./run logs        # логи всех сервисов
-./run debug       # простая диагностика
-./run clean       # полное удаление контейнеров и данных
+kentavra-go install    # первичная настройка Akvorado
+kentavra-go start      # запуск сервисов
+kentavra-go stop       # остановка
+kentavra-go restart    # перезапуск
+kentavra-go status     # текущий статус
+kentavra-go logs       # логи всех сервисов
+kentavra-go debug      # простая диагностика
+kentavra-go clean      # полное удаление контейнеров и данных
 ```
 
 Есть команды для исправления распространённых проблем:
 ```bash
-./run fix dns
-./run fix conntrack
-./run fix kafka
-./run fix jmx
-./run fix clickhouse
+kentavra-go fix dns
+kentavra-go fix conntrack
+kentavra-go fix kafka
+kentavra-go fix jmx
+kentavra-go fix clickhouse
 ```
 
 Для теста можно запустить генерацию NetFlow и sFlow:
 ```bash
-./run test softflowd
-./run test tcpdump
+kentavra-go test softflowd
+kentavra-go test tcpdump
 ```
 
 Смотрите файл `env` для настроек портов и путей.
