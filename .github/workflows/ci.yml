@@ -18,6 +18,11 @@ jobs:
       - run: pip install -r requirements.txt
       - run: pytest -q
       - run: go build -o kentavra-go cmd/kentavra/main.go
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v5
         with:
           context: .
@@ -29,4 +34,3 @@ jobs:
             UI_PORT=8000
         env:
           DOCKER_BUILDKIT: 1
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
