@@ -11,13 +11,13 @@ def run_cmd(cmd):
 
 
 def test_help():
-    code, out = run_cmd("./kentavra/run help")
+    code, out = run_cmd("go run ./cmd/kentavra/main.go help")
     assert code == 0
-    assert "Использование" in out
+    assert "Usage" in out
 
 
 def test_version():
-    code, out = run_cmd("./kentavra/run version")
+    code, out = run_cmd("go run ./cmd/kentavra/main.go version")
     assert code == 0
     assert "Kentavra version" in out
 
